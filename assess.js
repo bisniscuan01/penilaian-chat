@@ -10,6 +10,9 @@ import { renderHTML, printConsole } from './report.js';
 
 const execFileP = promisify(execFile);
 const UA = { 'User-Agent': 'penilaian-pawonboga', Accept: 'application/vnd.github+json' };
+// Opsional: token GitHub untuk batch besar (tanpa token: ±60 req/jam ≈ 20 peserta)
+const TOKEN = process.env.GITHUB_TOKEN;
+if (TOKEN) UA.Authorization = `Bearer ${TOKEN}`;
 // Jalankan npm lewat node langsung (.cmd dilarang tanpa shell di Node modern)
 const NPM_CLI = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
 

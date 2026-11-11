@@ -21,7 +21,21 @@ node assess.js --batch peserta.csv
 
 # Lebih cepat tanpa menjalankan test peserta
 node assess.js --batch peserta.csv --no-run-tests
+
+# Batch besar (mis. 100 peserta): pakai token GitHub agar tidak kena rate limit
+$env:GITHUB_TOKEN = "ghp_token_anda"   # buat di github.com/settings/tokens, scope public_repo
+node assess.js --batch peserta.csv --no-run-tests
 ```
+
+## Strategi untuk banyak peserta
+
+| Jumlah peserta | Rekomendasi |
+|---|---|
+| < 20 | Mode default (test dijalankan) — bukti terkuat |
+| 20–100 | Token GitHub + `--no-run-tests` untuk triase cepat seluruh kelas (±15–25 mnt), lalu jalankan ulang mode default untuk peserta yang meragukan/batas kelulusan |
+| > 100 | Sama, bagi CSV menjadi beberapa file dan jalankan bertahap |
+
+Tanpa token, GitHub membatasi ±60 request API/jam (3 request per peserta → ±20 peserta/jam). Dengan token gratis: 5.000 req/jam.
 
 ## Output (folder `hasil/`)
 
@@ -52,5 +66,5 @@ Mode default **menjalankan `npm test` pada kode peserta** setelah `npm ci --igno
 ## Keterbatasan
 
 - Pemeriksaan mengasumsikan struktur proyek sesuai handbook (`src/products.js`, `src/store.js`, dst.). Struktur berbeda dapat menurunkan skor meski fitur ada — periksa manual bila ragu.
-- API GitHub tanpa token dibatasi ±60 request/jam (cukup untuk ±25 peserta per run batch).
-- Repo harus **public**; repo privat memerlukan token (belum didukung).
+- API GitHub tanpa token dibatasi ±60 request/jam (±20 peserta). Untuk batch besar, set environment variable `GITHUB_TOKEN` (5.000 req/jam).
+- Repo harus **public**, atau gunakan `GITHUB_TOKEN` dengan akses ke repo privat tersebut.
