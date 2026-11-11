@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ASPECTS, CHECKS } from './checks.js';
+import { ASPECTS, CHECKS, LIVE_CHECKS } from './checks.js';
 import { renderHTML, printConsole } from './report.js';
 
 const execFileP = promisify(execFile);
@@ -42,8 +42,8 @@ async function fetchLive(url) {
   try {
     const r = await fetch(url, { headers: UA, redirect: 'follow' });
     const html = (await r.text()).slice(0, 200000);
-    return { ok: r.ok, status: r.status, html };
-  } catch (e) { return { ok: false, status: 0, html: '', note: e.message }; }
+    return { ok: r.ok, status: r.status, html, url: r.url };
+  } catch (e) { return { ok: false, status: 0, html: '', url, note: e.message }; }
 }
 
 /* ---------- jalankan test peserta (opsional, default aktif) ---------- */
@@ -105,30 +105,70 @@ async function buildCtx(repoUrl, liveUrl, wantRunTests, workbase) {
   return ctx;
 }
 
+/* ---------- bangun konteks mode live-only (tanpa repo) ---------- */
+async function buildLiveCtx(liveUrl) {
+  const live = await fetchLive(liveUrl);
+  let bundle = '', liveCss = '';
+  if (live.ok && live.html) {
+    const base = live.url || liveUrl;
+    const jsSrcs = [...live.html.matchAll(/<script[^>]+src=["']([^"']+\.js)["']/g)].map((m) => m[1]);
+    const cssHrefs = [...live.html.matchAll(/<link[^>]+href=["']([^"']+\.css)["']/g)].map((m) => m[1]);
+    const fetchText = async (u, cap) => {
+      try {
+        const r = await fetch(new URL(u, base), { headers: UA });
+        return r.ok ? (await r.text()).slice(0, cap) : '';
+      } catch { return ''; }
+    };
+    bundle = (await Promise.all(jsSrcs.map((u) => fetchText(u, 4_000_000)))).join('\n');
+    liveCss = (await Promise.all(cssHrefs.map((u) => fetchText(u, 1_000_000)))).join('\n');
+  }
+  return {
+    mode: 'live', owner: null, repo: null, branch: null,
+    fileList: [], files: new Map(), commitCount: null, commitMessages: [],
+    live, bundle, liveCss, testRun: null,
+  };
+}
+
 /* ---------- penilaian ---------- */
 function assess(ctx, presentasi) {
-  const results = CHECKS.map((ch) => ({
+  const isLive = ctx.mode === 'live';
+  const results = (isLive ? LIVE_CHECKS : CHECKS).map((ch) => ({
     aspect: ch.aspect, points: ch.points, desc: ch.desc, pass: !!ch.run(ctx), needsRun: !!ch.needsRun,
   }));
 
   const aspects = ASPECTS.map((a) => {
     const rows = results.filter((r) => r.aspect === a.key);
+    const flags = [];
+    if (rows.length === 0) {
+      flags.push(a.manual
+        ? 'Dinilai manual oleh instruktur saat demo/presentasi.'
+        : 'Tidak dapat diverifikasi dari situs live — minta repo GitHub atau nilai manual.');
+      return { ...a, score: null, earned: 0, possible: 0, checks: [], flags, unverified: !a.manual };
+    }
     const possible = rows.reduce((s, r) => s + r.points, 0);
     const earned = rows.reduce((s, r) => s + (r.pass ? r.points : 0), 0);
-    const flags = [];
     if (a.semiManual) flags.push(a.semiManual);
-    if (a.noteIfNoRun && !ctx.testRun?.passed) flags.push(a.noteIfNoRun);
+    if (isLive && a.liveNote) flags.push(a.liveNote);
+    if (!isLive && a.noteIfNoRun && !ctx.testRun?.passed) flags.push(a.noteIfNoRun);
     if (a.manual) flags.push('Dinilai manual oleh instruktur saat demo/presentasi.');
-    const score = possible ? Math.round((earned / possible) * 1000) / 10 : null;
+    const score = Math.round((earned / possible) * 1000) / 10;
     return { ...a, score, earned, possible, checks: rows, flags };
   });
 
-  const autoTotal = aspects
-    .filter((a) => !a.manual)
-    .reduce((s, a) => s + (a.weight * (a.score ?? 0)) / 100, 0);
+  const verifiable = aspects.filter((a) => !a.manual && a.score !== null);
+  const autoTotal = verifiable.reduce((s, a) => s + (a.weight * a.score) / 100, 0);
+  const maxAuto = verifiable.reduce((s, a) => s + a.weight, 0);
   const final = typeof presentasi === 'number' ? autoTotal + (presentasi * 5) / 100 : null;
 
-  return { aspects, autoTotal: Math.round(autoTotal * 10) / 10, presentasi: presentasi ?? null, final: final === null ? null : Math.round(final * 10) / 10 };
+  return {
+    mode: isLive ? 'live' : 'repo',
+    aspects,
+    autoTotal: Math.round(autoTotal * 10) / 10,
+    maxAuto,
+    presentasi: presentasi ?? null,
+    final: final === null ? null : Math.round(final * 10) / 10,
+    maxFinal: maxAuto + 5,
+  };
 }
 
 /* ---------- CLI ---------- */
@@ -148,9 +188,15 @@ function parseArgs(argv) {
 }
 
 async function assessOne(peserta, opts, workbase) {
-  const ctx = await buildCtx(peserta.repo, peserta.live, opts.runTests, workbase);
+  if (!peserta.repo && !peserta.live) throw new Error('Peserta tanpa repo maupun URL live');
+  const ctx = peserta.repo
+    ? await buildCtx(peserta.repo, peserta.live, opts.runTests, workbase)
+    : await buildLiveCtx(peserta.live);
   const result = assess(ctx, peserta.presentasi);
-  return { ...peserta, repo: peserta.repo, live: peserta.live || null, ctxMeta: { branch: ctx.branch, commitCount: ctx.commitCount, testRun: ctx.testRun ? { ran: ctx.testRun.ran, passed: ctx.testRun.passed, note: ctx.testRun.note || null, output: (ctx.testRun.output || '').slice(-800) } : null }, ...result };
+  const ctxMeta = ctx.mode === 'live'
+    ? { mode: 'live', liveStatus: ctx.live?.status ?? 0 }
+    : { branch: ctx.branch, commitCount: ctx.commitCount, testRun: ctx.testRun ? { ran: ctx.testRun.ran, passed: ctx.testRun.passed, note: ctx.testRun.note || null, output: (ctx.testRun.output || '').slice(-800) } : null };
+  return { ...peserta, repo: peserta.repo || null, live: peserta.live || null, ctxMeta, ...result };
 }
 
 async function main() {
@@ -161,33 +207,35 @@ async function main() {
     const csv = await fs.readFile(opts.batch, 'utf8');
     peserta = csv.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).map((l) => {
       const [nama, repo, live, pres] = l.split(',').map((s) => (s || '').trim());
-      return { nama, repo, live: live || null, presentasi: pres === '' || pres === undefined ? null : Number(pres) };
+      return { nama, repo: repo || null, live: live || null, presentasi: pres === '' || pres === undefined ? null : Number(pres) };
     });
     var pesertaList = peserta;
-  } else if (opts.repo) {
-    pesertaList = [{ nama: opts.nama || parseRepo(opts.repo).repo, repo: opts.repo, live: opts.live || null, presentasi: Number.isFinite(opts.presentasi) ? opts.presentasi : null }];
+  } else if (opts.repo || opts.live) {
+    pesertaList = [{ nama: opts.nama || (opts.repo ? parseRepo(opts.repo).repo : opts.live), repo: opts.repo || null, live: opts.live || null, presentasi: Number.isFinite(opts.presentasi) ? opts.presentasi : null }];
   } else {
     console.log(`Penggunaan:
   node assess.js --repo <url-github> [--live <url>] [--nama <nama>] [--presentasi 0-100]
+  node assess.js --live <url-deploy>          # mode live-only (tanpa repo)
   node assess.js --batch peserta.csv
 Opsi: --no-run-tests (lewati eksekusi npm test) · --out <folder> (default: hasil)
 
 Format peserta.csv (satu peserta per baris):
-  Nama,https://github.com/user/repo,https://url-live,80`);
+  Nama,https://github.com/user/repo,https://url-live,80
+  Nama,,https://url-live,80                    # kolom repo kosong = mode live-only`);
     process.exit(1);
   }
 
   await fs.mkdir(opts.out, { recursive: true });
   const all = [];
   for (const p of pesertaList) {
-    process.stdout.write(`Menilai ${p.nama} (${p.repo}) ... `);
+    process.stdout.write(`Menilai ${p.nama} (${p.repo || p.live}) ... `);
     try {
       const workbase = await fs.mkdtemp(path.join(os.tmpdir(), 'nilai-'));
       try {
         const r = await assessOne(p, opts, workbase);
         all.push(r);
         const ts = r.ctxMeta?.testRun;
-        console.log(`selesai — total otomatis ${r.autoTotal}/95` + (ts ? (ts.ran ? (ts.passed ? ' · npm test LULUS' : ' · npm test GAGAL') : ` · test tidak dijalankan (${ts.note || '?'})`) : ''));
+        console.log(`selesai — total otomatis ${r.autoTotal}/${r.maxAuto}` + (ts ? (ts.ran ? (ts.passed ? ' · npm test LULUS' : ' · npm test GAGAL') : ` · test tidak dijalankan (${ts.note || '?'})`) : ''));
       } finally {
         await fs.rm(workbase, { recursive: true, force: true }).catch(() => {});
       }
@@ -202,7 +250,7 @@ Format peserta.csv (satu peserta per baris):
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   await fs.writeFile(path.join(opts.out, `penilaian-${stamp}.json`), JSON.stringify(all, null, 2));
   await fs.writeFile(path.join(opts.out, 'laporan-penilaian.html'), renderHTML(all));
-  const csvRows = ['nama,repo,total_otomatis_95,presentasi,nilai_akhir_100', ...all.map((r) => [r.nama, r.repo, r.autoTotal, r.presentasi ?? '', r.final ?? ''].join(','))];
+  const csvRows = ['nama,repo,mode,total_otomatis,maks_otomatis,presentasi,nilai_akhir,maks_akhir', ...all.map((r) => [r.nama, r.repo || '', r.mode || '', r.autoTotal, r.maxAuto ?? '', r.presentasi ?? '', r.final ?? '', r.maxFinal ?? ''].join(','))];
   await fs.writeFile(path.join(opts.out, 'ringkasan.csv'), csvRows.join('\n'));
 
   console.log(`\nLaporan: ${path.join(opts.out, 'laporan-penilaian.html')}`);

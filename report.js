@@ -7,12 +7,17 @@ export function grade(n) {
 export function printConsole(r) {
   console.log('\n========================================');
   console.log(`Peserta : ${r.nama}`);
-  console.log(`Repo    : ${r.repo}`);
   if (r.error) { console.log(`GAGAL   : ${r.error}`); return; }
+  console.log(`Repo    : ${r.repo || '(tidak ada — mode live-only)'}`);
   console.log(`Live    : ${r.live || '(tidak diberikan)'}`);
+  if (r.mode === 'live') console.log(`Mode    : LIVE-ONLY — hanya ${r.maxAuto} dari 95 poin rubrik yang dapat diverifikasi otomatis`);
   for (const a of r.aspects) {
     if (a.manual) {
       console.log(`  ${a.name} (${a.weight}%) : MANUAL${r.presentasi !== null ? ' = ' + r.presentasi : ''}`);
+      continue;
+    }
+    if (a.score === null) {
+      console.log(`  ${a.name.padEnd(30)} (${a.weight}%) : TIDAK TERVERIFIKASI`);
       continue;
     }
     const tag = a.flags.length ? '  [review instruktur]' : '';
@@ -21,9 +26,9 @@ export function printConsole(r) {
       console.log(`      [--] ${c.desc}`);
     }
   }
-  console.log(`  TOTAL OTOMATIS (6 aspek) : ${r.autoTotal}/95`);
-  if (r.final !== null) console.log(`  NILAI AKHIR (+presentasi): ${r.final}/100 — ${grade(r.final)}`);
-  else console.log('  NILAI AKHIR              : tambahkan skor presentasi (maks 5 poin) oleh instruktur');
+  console.log(`  TOTAL OTOMATIS (terverifikasi): ${r.autoTotal}/${r.maxAuto}`);
+  if (r.final !== null) console.log(`  NILAI AKHIR (+presentasi)  : ${r.final}/${r.maxFinal}${r.maxFinal === 100 ? ' — ' + grade(r.final) : ' (skala penuh 100 butuh verifikasi aspek lainnya)'}`);
+  else console.log('  NILAI AKHIR                : tambahkan skor presentasi (maks 5 poin) oleh instruktur');
 }
 
 function esc(s) {
@@ -35,33 +40,39 @@ function rowClass(score) {
 }
 
 export function renderHTML(all) {
+  const anyLive = all.some((r) => r.mode === 'live');
   const rows = all.map((r) => {
     if (r.error) {
       return `<tr class="bad"><td>${esc(r.nama)}</td><td colspan="4">Gagal dinilai: ${esc(r.error)}</td></tr>`;
     }
-    return `<tr class="${rowClass(r.final ?? (r.autoTotal / 95) * 100)}">
+    const repoCell = r.repo
+      ? `<a href="${esc(r.repo)}">${esc(r.repo.replace('https://github.com/', ''))}</a>`
+      : '— (live-only)';
+    return `<tr class="${rowClass(r.final ?? (r.autoTotal / r.maxAuto) * 100)}">
       <td>${esc(r.nama)}</td>
-      <td><a href="${esc(r.repo)}">${esc(r.repo.replace('https://github.com/', ''))}</a></td>
-      <td>${r.autoTotal}/95</td>
+      <td>${repoCell}</td>
+      <td>${r.autoTotal}/${r.maxAuto}</td>
       <td>${r.presentasi ?? '—'}</td>
-      <td><b>${r.final !== null ? r.final + '/100 · ' + grade(r.final) : 'menunggu presentasi'}</b></td>
+      <td><b>${r.final !== null ? r.final + '/' + r.maxFinal + (r.maxFinal === 100 ? ' · ' + grade(r.final) : '') : 'menunggu presentasi'}</b></td>
     </tr>`;
   }).join('\n');
 
   const details = all.map((r) => {
     if (r.error) return '';
     const aspects = r.aspects.map((a) => {
-      const checks = a.manual
-        ? '<p class="muted">Aspek ini dinilai manual oleh instruktur.</p>'
+      const checks = (a.manual || a.score === null)
+        ? ''
         : '<table class="checks">' + a.checks.map((c) =>
             `<tr><td class="mark">${c.pass ? '✓' : '✗'}</td><td>${esc(c.desc)}</td><td class="pts">${c.pass ? c.points : 0}/${c.points}</td></tr>`).join('') + '</table>';
       const flags = (a.flags || []).map((f) => `<p class="flag">⚠ ${esc(f)}</p>`).join('');
-      return `<div class="aspect"><h4>${esc(a.name)} <span class="muted">(${a.weight}%)</span> — ${a.manual ? 'manual' : a.score + '/100'}</h3>${flags}${checks}</div>`;
+      const state = a.manual ? 'manual' : a.score === null ? 'tidak terverifikasi' : a.score + '/100';
+      return `<div class="aspect"><h4>${esc(a.name)} <span class="muted">(${a.weight}%)</span> — ${state}</h4>${flags}${checks}</div>`;
     }).join('');
     const meta = [];
+    if (r.ctxMeta?.mode === 'live') meta.push('mode live-only · HTTP ' + (r.ctxMeta.liveStatus || '?'));
     if (r.ctxMeta?.commitCount !== null && r.ctxMeta?.commitCount !== undefined) meta.push(`${r.ctxMeta.commitCount} commit`);
     if (r.ctxMeta?.testRun) meta.push(r.ctxMeta.testRun.passed ? 'npm test: LULUS' : r.ctxMeta.testRun.ran ? 'npm test: GAGAL' : 'test tidak dijalankan');
-    return `<details><summary><b>${esc(r.nama)}</b> — total otomatis ${r.autoTotal}/95${r.final !== null ? ` · nilai akhir <b>${r.final}/100 (${grade(r.final)})</b>` : ''} <span class="muted">${meta.map(esc).join(' · ')}</span></summary>${aspects}</details>`;
+    return `<details><summary><b>${esc(r.nama)}</b> — total otomatis ${r.autoTotal}/${r.maxAuto}${r.final !== null ? ` · nilai akhir <b>${r.final}/${r.maxFinal}${r.maxFinal === 100 ? ` (${grade(r.final)})` : ''}</b>` : ''} <span class="muted">${meta.map(esc).join(' · ')}</span></summary>${aspects}</details>`;
   }).join('\n');
 
   return `<!doctype html>
@@ -85,7 +96,7 @@ footer{margin-top:32px;color:#6e6152;font-size:13px}
 <h1>Laporan Penilaian — Lab PawonBoga</h1>
 <p class="muted">Dibuat otomatis oleh penilaian-pawonboga pada ${new Date().toLocaleString('id-ID')}.
 Skor otomatis mencakup 6 aspek (maks 95 poin); aspek <b>Presentasi &amp; refleksi (5%)</b> dinilai manual oleh instruktur.
-Skor otomatis adalah bukti awal — instruktur tetap memverifikasi sebelum memberi nilai akhir.</p>
+Skor otomatis adalah bukti awal — instruktur tetap memverifikasi sebelum memberi nilai akhir.${anyLive ? ' Peserta bertanda <i>live-only</i> dinilai tanpa repo: totalnya memakai skala poin yang terverifikasi saja, dan aspek tanpa bukti ditandai <b>tidak terverifikasi</b>.' : ''}</p>
 <table><thead><tr><th>Peserta</th><th>Repo</th><th>Total otomatis</th><th>Presentasi</th><th>Nilai akhir</th></tr></thead>
 <tbody>${rows}</tbody></table>
 <h2>Detail per peserta</h2>

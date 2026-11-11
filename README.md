@@ -16,6 +16,9 @@ cd "C:\CHAT\Web Dev\penilaian-pawonboga"
 # Satu peserta
 node assess.js --repo https://github.com/USER/pawonboga --live https://USER.github.io/pawonboga/ --nama "Budi" --presentasi 85
 
+# Peserta hanya mengumpulkan URL deploy (tanpa repo)
+node assess.js --live https://USER.github.io/pawonboga/ --nama "Siti"
+
 # Banyak peserta sekaligus (lihat peserta.example.csv)
 node assess.js --batch peserta.csv
 
@@ -43,7 +46,24 @@ Tanpa token, GitHub membatasi ±60 request API/jam (3 request per peserta → ±
 - `ringkasan.csv` — rekap nilai
 - `penilaian-<waktu>.json` — data mentah seluruh pemeriksaan
 
-## Apa yang diperiksa
+## Mode live-only (peserta hanya mengumpulkan URL deploy)
+
+Bisa, dengan batasan. Kosongkan kolom repo di CSV (`Nama,,https://url-live,80`) atau jalankan `node assess.js --live <url>` tanpa `--repo`.
+
+Tool mengunduh HTML + bundle JS + CSS yang di-serve, lalu memverifikasi marker yang bertahan setelah build/minify Vite (nama kategori, key localStorage, `wa.me`, label Dashboard/Ekspor/Impor, HTTPS, media query, dsb.).
+
+| Aspek | Mode live-only |
+|---|---|
+| Fitur katalog & dashboard (25%) | ✅ Terverifikasi dari marker bundle |
+| Pengujian fungsi (15%) | ❌ Tidak terverifikasi — minta repo atau nilai manual |
+| Pengujian keamanan (15%) | ⚠ Parsial: HTTPS + pemindaian secret saja |
+| Prompt & proses iteratif (10%) | ❌ Tidak terverifikasi — minta repo atau nilai manual |
+| Deployment & dokumentasi (10%) | ⚠ Parsial: status 200 + title (README/workflow tak terlihat) |
+| UI/UX & responsivitas (20%) | ✅ Dari HTML + CSS yang di-serve |
+
+Total otomatis mode live-only: **70 dari 95 poin**. Laporan menandai dengan jelas aspek yang tidak terverifikasi — instruktur yang melengkapi.
+
+## Apa yang diperiksa (mode repo penuh)
 
 | Aspek (bobot) | Contoh pemeriksaan otomatis |
 |---|---|

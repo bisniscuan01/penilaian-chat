@@ -1,2 +1,4 @@
 # Format: Nama, URL repo GitHub, URL live (opsional), skor presentasi 0-100 (opsional)
 Budi Santoso,https://github.com/bisniscuan01/pawonboga,https://bisniscuan01.github.io/pawonboga/,85
+# Mode live-only: kosongkan kolom repo bila peserta hanya mengumpulkan URL deploy
+# Siti Live,,https://bisniscuan01.github.io/pawonboga/,80

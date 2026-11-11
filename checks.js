@@ -2,11 +2,11 @@
 // Setiap check menghasilkan poin bila lulus. Poin per aspek dinormalisasi ke skala 0-100.
 
 export const ASPECTS = [
-  { key: 'fitur',      name: 'Fitur katalog & dashboard',   weight: 25 },
+  { key: 'fitur',      name: 'Fitur katalog & dashboard',   weight: 25, liveNote: 'Mode live: fitur diverifikasi dari marker di bundle hasil build, bukan dari kode sumber.' },
   { key: 'uji',        name: 'Pengujian fungsi',            weight: 15, noteIfNoRun: 'Test tidak dijalankan otomatis — jalankan tanpa --no-run-tests atau verifikasi manual.' },
-  { key: 'aman',       name: 'Pengujian keamanan',          weight: 15 },
+  { key: 'aman',       name: 'Pengujian keamanan',          weight: 15, liveNote: 'Mode live: hanya HTTPS dan pemindaian secret yang terverifikasi; escape HTML, validasi impor, dan audit perlu repo atau verifikasi manual.' },
   { key: 'proses',     name: 'Prompt & proses iteratif',    weight: 10 },
-  { key: 'deploy',     name: 'Deployment & dokumentasi',    weight: 10 },
+  { key: 'deploy',     name: 'Deployment & dokumentasi',    weight: 10, liveNote: 'Mode live: README dan workflow tidak dapat diverifikasi; skor dinormalisasi dari pemeriksaan yang tersedia.' },
   { key: 'uiux',       name: 'UI/UX & responsivitas',       weight: 20, semiManual: 'Pemeriksaan otomatis maks 85 poin (struktur responsif). Kontras, kerapian, dan uji mobile nyata dinilai instruktur saat demo.' },
   { key: 'presentasi', name: 'Presentasi & refleksi',       weight: 5,  manual: true },
 ];
@@ -109,3 +109,56 @@ export const CHECKS = [
 function ctxFiles(ctx) {
   return ctx.fileList.filter((p) => ctx.files.has(p)).map((p) => [p, ctx.files.get(p)]);
 }
+
+/* ===== Mode live-only: peserta hanya mengumpulkan URL situs yang dideploy =====
+   Pemeriksaan memakai marker yang bertahan setelah build/minify Vite:
+   string literal (nama kategori, key localStorage, wa.me, label UI) tidak di-mangle. */
+
+const siteText = (ctx) => (ctx.live?.html || '') + '\n' + (ctx.bundle || '') + '\n' + (ctx.liveCss || '');
+const siteJs = (ctx) => ctx.bundle || '';
+const siteCss = (ctx) => ctx.liveCss || '';
+
+export const LIVE_CHECKS = [
+  /* ---- Fitur katalog & dashboard (25%) ---- */
+  { aspect: 'fitur', points: 15, desc: 'Empat kategori muncul di situs: Makanan, Minuman, Camilan, Bumbu',
+    run: (c) => ['Makanan', 'Minuman', 'Camilan', 'Bumbu'].every((k) => siteText(c).includes(k)) },
+  { aspect: 'fitur', points: 15, desc: 'Persistensi localStorage key pawonboga:products:v1 (di bundle JS)',
+    run: (c) => siteJs(c).includes('pawonboga:products:v1') },
+  { aspect: 'fitur', points: 20, desc: 'Integrasi WhatsApp: wa.me + encodeURIComponent (di bundle JS)',
+    run: (c) => /wa\.me/.test(siteJs(c)) && /encodeURIComponent/.test(siteJs(c)) },
+  { aspect: 'fitur', points: 15, desc: 'Pencarian/filter/sorting (label Cari, Kategori, Urutkan)',
+    run: (c) => /cari|search/i.test(siteText(c)) && /kategori|filter/i.test(siteText(c)) && /urut|sort/i.test(siteText(c)) },
+  { aspect: 'fitur', points: 15, desc: 'Dashboard CRUD (label Dashboard, Tambah, Ubah/Edit, Hapus)',
+    run: (c) => /dashboard/i.test(siteText(c)) && /tambah/i.test(siteText(c)) && /(ubah|edit)/i.test(siteText(c)) && /(hapus|delete)/i.test(siteText(c)) },
+  { aspect: 'fitur', points: 10, desc: 'Ekspor/Impor JSON (label Ekspor/Export, Impor/Import)',
+    run: (c) => /(ekspor|export)/i.test(siteText(c)) && /(impor|import)/i.test(siteText(c)) && /json/i.test(siteText(c)) },
+  { aspect: 'fitur', points: 10, desc: 'Form produk lengkap (label Harga, Stok, Kategori)',
+    run: (c) => /harga/i.test(siteText(c)) && /stok/i.test(siteText(c)) && /kategori/i.test(siteText(c)) },
+
+  /* ---- Pengujian keamanan (15%) — verifikasi terbatas dari luar ---- */
+  { aspect: 'aman', points: 50, desc: 'Situs di-serve via HTTPS',
+    run: (c) => (c.live?.url || '').startsWith('https://') },
+  { aspect: 'aman', points: 50, desc: 'Tidak ada pola secret/API key di bundle yang di-serve',
+    run: (c) => {
+      const re = /(api[_-]?key|secret|password|token)\s*[:=]\s*['"][^'"]{8,}|sk-[a-zA-Z0-9]{20,}/i;
+      return !re.test(siteJs(c));
+    } },
+
+  /* ---- Deployment & dokumentasi (10%) ---- */
+  { aspect: 'deploy', points: 70, desc: 'URL live merespons HTTP 200',
+    run: (c) => c.live?.ok === true },
+  { aspect: 'deploy', points: 15, desc: 'Halaman punya <title>',
+    run: (c) => !!c.live?.html && /<title>[^<]+<\/title>/.test(c.live.html) },
+
+  /* ---- UI/UX & responsivitas (20%) — dari HTML + CSS yang di-serve ---- */
+  { aspect: 'uiux', points: 20, desc: 'Meta viewport (mobile-ready)',
+    run: (c) => /name=["']viewport["']/.test(c.live?.html || '') },
+  { aspect: 'uiux', points: 20, desc: 'Minimal 2 media query responsif (di CSS hasil build)',
+    run: (c) => (siteCss(c).match(/@media/g) || []).length >= 2 },
+  { aspect: 'uiux', points: 15, desc: 'Grid/flex responsif (auto-fill/minmax/flex-wrap)',
+    run: (c) => /auto-fill|minmax|flex-wrap|grid-template/.test(siteCss(c)) },
+  { aspect: 'uiux', points: 10, desc: 'Menghormati prefers-reduced-motion',
+    run: (c) => /prefers-reduced-motion/.test(siteCss(c)) },
+  { aspect: 'uiux', points: 10, desc: 'Fokus keyboard terlihat (:focus-visible)',
+    run: (c) => /:focus-visible/.test(siteCss(c)) },
+];
