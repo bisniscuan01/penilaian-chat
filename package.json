@@ -1,0 +1,8 @@
+{
+  "name": "penilaian-pawonboga",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Penilaian otomatis hasil lab PawonBoga berdasarkan rubrik (repo GitHub + URL live)",
+  "engines": { "node": ">=18" }
+}
